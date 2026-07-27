@@ -2,6 +2,7 @@
 import { computeIndices } from "./soundings/indices";
 import { WEISMAN_KLEMP, PULSE_STORM, TORNADO_OUTBREAK, LOW_TOPPED } from "./soundings/presets";
 import { generateSounding } from "./soundings/generator";
+import { fetchHistorical, parsePasted } from "./soundings/historical";
 import { renderSkewT } from "./ui/skewt";
 import { renderHodograph } from "./ui/hodograph";
 import type { Sounding } from "./soundings/schema";
@@ -51,6 +52,12 @@ function panel2HTML(s: Sounding): string {
     </tbody></table>`;
 }
 
+function renderHodographEl(s: Sounding): HTMLElement {
+  const div = document.createElement("div");
+  div.innerHTML = renderHodograph(s);
+  return div;
+}
+
 function render() {
   const s = library[selectedIndex];
   const options = library.map((snd, i) => `<option value="${i}" ${i === selectedIndex ? "selected" : ""}>${snd.meta.name}</option>`).join("");
@@ -58,15 +65,36 @@ function render() {
   app.innerHTML = `
     <h1 style="margin-bottom:4px;">W5 — World Wide Web Weather Watcher</h1>
     <p style="color:#666; margin-top:0;">SPC-style sounding analysis · <b>drag the red/green dots to edit</b> 🖱️</p>
+
     <div style="background:#f4f4f8; border:1px solid #ddd; border-radius:8px; padding:12px; margin:12px 0;">
       <label style="font-weight:bold;">🌪️ Describe a storm:</label><br/>
       <input id="descInput" type="text" placeholder="e.g. violent rain-wrapped tornado" style="width:55%; padding:8px; border-radius:4px; border:1px solid #bbb; margin-top:6px;"/>
       <button id="genBtn" style="padding:8px 16px; border-radius:4px; border:none; background:#3060d0; color:#fff; cursor:pointer;">Generate</button>
     </div>
+
+    <div style="background:#eef4ee; border:1px solid #cdd; border-radius:8px; padding:12px; margin:12px 0;">
+      <label style="font-weight:bold;">📡 Import real sounding (Univ. Wyoming):</label><br/>
+      <div style="margin-top:6px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+        <input id="stn" placeholder="Station" value="72357" style="width:110px; padding:6px; border:1px solid #bbb; border-radius:4px;"/>
+        <input id="yr" placeholder="YYYY" value="2013" style="width:70px; padding:6px; border:1px solid #bbb; border-radius:4px;"/>
+        <input id="mo" placeholder="MM" value="05" style="width:50px; padding:6px; border:1px solid #bbb; border-radius:4px;"/>
+        <input id="dy" placeholder="DD" value="20" style="width:50px; padding:6px; border:1px solid #bbb; border-radius:4px;"/>
+        <select id="hr" style="padding:6px; border:1px solid #bbb; border-radius:4px;"><option value="00">00Z</option><option value="12" selected>12Z</option></select>
+        <button id="fetchBtn" style="padding:6px 14px; border:none; background:#2a8; color:#fff; border-radius:4px; cursor:pointer;">Fetch</button>
+        <span id="fetchMsg" style="font-size:12px;"></span>
+      </div>
+      <div style="margin-top:8px;">
+        <textarea id="pasteBox" placeholder="...or paste raw Wyoming table text here and click Parse" style="width:75%; height:38px; padding:6px; border:1px solid #bbb; border-radius:4px; font-family:monospace; font-size:11px; vertical-align:middle;"></textarea>
+        <button id="parseBtn" style="padding:6px 14px; border:none; background:#68a; color:#fff; border-radius:4px; cursor:pointer;">Parse</button>
+      </div>
+      <p style="margin:6px 0 0 0; font-size:11px; color:#888;">Station examples: 72357 Norman OK · 72293 San Diego · 72249 Fort Worth · 72469 Denver. If Fetch is blocked, paste the text table from weather.uwyo.edu.</p>
+    </div>
+
     <div style="margin:12px 0;">
       <label style="font-weight:bold; margin-right:8px;">Environment:</label>
       <select id="picker" style="padding:6px 10px; border-radius:4px;">${options}</select>
     </div>
+
     <h2 style="margin:8px 0;">${s.meta.name}</h2>
     <div style="display:flex; gap:16px; align-items:flex-start; flex-wrap:wrap;">
       <div id="skewtSlot"></div>
@@ -77,12 +105,10 @@ function render() {
   `;
 
   const onEdit = (edited: Sounding) => {
-    // live-update only the panels + hodograph; skew-T updates itself in place
     document.querySelector("#panel1")!.innerHTML = panelHTML(edited);
     document.querySelector("#panel2")!.innerHTML = panel2HTML(edited);
     const hodo = document.querySelector("#hodoSlot")!;
     hodo.innerHTML = ""; hodo.appendChild(renderHodographEl(edited));
-    // redraw skew-T so curves follow the dragged points
     const slot = document.querySelector("#skewtSlot")!;
     slot.innerHTML = ""; slot.appendChild(renderSkewT(edited, onEdit));
   };
@@ -90,20 +116,40 @@ function render() {
   document.querySelector("#skewtSlot")!.appendChild(renderSkewT(s, onEdit));
   document.querySelector("#hodoSlot")!.appendChild(renderHodographEl(s));
 
+  // Picker
   document.querySelector<HTMLSelectElement>("#picker")!.addEventListener("change", (e) => {
     selectedIndex = parseInt((e.target as HTMLSelectElement).value, 10); render();
   });
+
+  // Generate
   const input = document.querySelector<HTMLInputElement>("#descInput")!;
   const gen = () => { const d = input.value.trim(); if (!d) return; library.push(generateSounding(d)); selectedIndex = library.length - 1; render(); };
   document.querySelector<HTMLButtonElement>("#genBtn")!.addEventListener("click", gen);
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") gen(); });
-}
 
-// helper: hodograph returns HTML string, wrap into an element
-function renderHodographEl(s: Sounding): HTMLElement {
-  const div = document.createElement("div");
-  div.innerHTML = renderHodograph(s);
-  return div;
+  // Historical fetch
+  const msg = document.querySelector<HTMLSpanElement>("#fetchMsg")!;
+  document.querySelector<HTMLButtonElement>("#fetchBtn")!.addEventListener("click", async () => {
+    msg.style.color = "#666"; msg.textContent = "Fetching...";
+    try {
+      const stn = (document.querySelector("#stn") as HTMLInputElement).value.trim();
+      const yr = (document.querySelector("#yr") as HTMLInputElement).value.trim();
+      const mo = (document.querySelector("#mo") as HTMLInputElement).value.trim();
+      const dy = (document.querySelector("#dy") as HTMLInputElement).value.trim();
+      const hr = (document.querySelector("#hr") as HTMLSelectElement).value as "00" | "12";
+      const snd = await fetchHistorical(stn, yr, mo, dy, hr);
+      library.push(snd); selectedIndex = library.length - 1; render();
+    } catch (err: any) { msg.style.color = "#a33"; msg.textContent = err.message || "Failed."; }
+  });
+
+  // Paste parse
+  document.querySelector<HTMLButtonElement>("#parseBtn")!.addEventListener("click", () => {
+    try {
+      const txt = (document.querySelector("#pasteBox") as HTMLTextAreaElement).value;
+      const snd = parsePasted(txt);
+      library.push(snd); selectedIndex = library.length - 1; render();
+    } catch (err: any) { msg.style.color = "#a33"; msg.textContent = err.message || "Parse failed."; }
+  });
 }
 
 render();
