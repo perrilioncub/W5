@@ -366,7 +366,6 @@ export function computeIndices(s: Sounding): SoundingIndices {
   const scp = Math.max(0, (mu.cape / 1000) * (srhEff / 50) * ebwdTerm);
 
   // SHIP: (MUCAPE * MUmr * LR75 * (-T500) * SHEAR6) / normalization
-  const muMR = mixingRatio(dewpointFromMixing(mixingRatio(s.surface.Td_C, s.surface.pressure_hPa), s.surface.pressure_hPa), s.surface.pressure_hPa) * 1000;
   let ship = (mu.cape * meanMR * lr_700_500 * (-T500) * (shr6)) / 42000000;
   ship = Math.max(0, ship);
 
