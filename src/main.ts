@@ -147,3 +147,57 @@ function render() {
   });
 }
 render();
+// --- Phase 1 milestone 7: STRAKA DENSITY CURRENT (validation gate) ---
+import { Grid } from "./solver/grid";
+import { renderGrid } from "./ui/gridview";
+import { advectAll } from "./solver/advection";
+import { applyBuoyancy } from "./solver/buoyancy";
+import { pressureProject, applyDamping } from "./solver/pressure";
+import { applyBoundaries } from "./solver/boundaries";
+
+// Straka setup: 25.6km wide x 6.4km tall, 100m res. Cold bubble that sinks.
+const g = new Grid({ nx: 256, nz: 64, dx: 100, dz: 100 });
+
+// Cold anomaly: centered at x=0 (we use domain center), z=3000m, ellipse radii 4000x2000
+(() => {
+  const { nx, nz, dx, dz } = g.cfg;
+  const xc = (nx * dx) / 2, zc = 3000, xr = 4000, zr = 2000;
+  for (let k = 0; k < nz; k++) {
+    for (let i = 0; i < nx; i++) {
+      const x = i * dx, z = k * dz;
+      const L = Math.sqrt(((x - xc) / xr) ** 2 + ((z - zc) / zr) ** 2);
+      if (L <= 1) {
+        // classic Straka: -15K max at center, cosine profile
+        g.theta[g.idx(i, k)] = -15 * (Math.cos(Math.PI * L) + 1) / 2;
+      }
+    }
+  }
+})();
+
+const dt = 1;
+
+const testDiv = document.createElement("div");
+testDiv.style.cssText = "margin-top:30px; padding:16px; border-top:3px solid #333;";
+testDiv.innerHTML = `<h2>🧪 Phase 1 · Milestone 7: STRAKA GATE 🎯</h2>
+  <p style="color:#666;">Cold bubble sinks, hits floor, rolls into a density current with Kelvin-Helmholtz rotors. The validation test!</p>
+  <div id="simCanvas"></div>
+  <p id="simInfo" style="color:#888; font-size:13px;"></p>`;
+app.appendChild(testDiv);
+
+const canvasSlot = testDiv.querySelector("#simCanvas")!;
+const info = testDiv.querySelector("#simInfo")!;
+let step = 0;
+
+function frame() {
+  applyBuoyancy(g, dt);
+  pressureProject(g, 25);
+  advectAll(g, dt);
+  applyDamping(g, 0.02);
+  applyBoundaries(g);
+  step++;
+  canvasSlot.innerHTML = "";
+  canvasSlot.appendChild(renderGrid(g, g.theta, 15, 4)); // scale 15 (cold=-15K)
+  info.textContent = `Step ${step} · sim time ${step * dt}s · cold pool spreading (ref: front ~15km @ 900s)`;
+  if (step < 900) setTimeout(() => requestAnimationFrame(frame), 30);
+}
+frame();
